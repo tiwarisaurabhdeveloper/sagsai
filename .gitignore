@@ -7,4 +7,4 @@ __pycache__/
 *.db
 *.rdb
 *.db-shm
-*.db-wal
+*.db-wal.DS_Store
