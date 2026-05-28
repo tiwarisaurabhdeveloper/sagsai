@@ -13,4 +13,4 @@ sleep 1
 echo "Starting FastAPI..."
 
 # Start Main App
-exec uvicorn main:app --host 0.0.0.0 --port 8001
+exec uvicorn main:app --host 0.0.0.0 --port 8001 --reload
