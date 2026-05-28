@@ -1,0 +1,17 @@
+uvicorn==0.46.0
+fastapi==0.136.1
+langchain==1.2.15
+langgraph==1.1.10
+langchain-mcp-adapters==0.2.2
+langchain-groq==1.1.2
+langchain-openai==1.2.1
+langchain-ollama==1.1.0
+langgraph-checkpoint-redis==0.4.1
+langchain-google-genai==4.2.2
+langchain-huggingface==1.2.2
+langgraph-checkpoint-sqlite==3.1.0
+requests==2.33.1
+bs4==0.0.2
+python-dotenv==1.2.2
+aiosqlite==0.22.1
+fastmcp==3.3.1
