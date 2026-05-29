@@ -1,24 +1,13 @@
 """
 main.py  — SAGS AI
-────────────────────────────────────────────────────────────
-CHANGES FROM YOUR PREVIOUS VERSION (marked with  # ← NEW):
-  1. Added  pathlib, shutil, List  imports
-  2. Added  UploadFile, File, Form  from fastapi
-  3. UPLOAD_DIR constant + auto-create on startup
-  4. /chat now uses  Form + File  instead of JSON body
-     so it can receive both text fields and file uploads
-  5. Files are saved to uploads/ and their paths are
-     appended to the user message sent to the agent
-  6. Everything else (routes, _build_response, etc.)
-     is identical to your working version
 """
 
 import uuid, json, logging, ast, re
 from contextlib import asynccontextmanager
-from pathlib import Path                          # ← NEW
-from typing import Optional, List                 # ← NEW  (added List)
+from pathlib import Path
+from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form   # ← NEW
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,10 +21,11 @@ from langgraph_database_backend import trim_memory
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── upload folder ─────────────────────────────  ← NEW
+# ── upload folder ─────────────────────────────
 UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)                  # create if not present
+UPLOAD_DIR.mkdir(exist_ok=True)
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
 
 # ── lifespan ──────────────────────────────────
 @asynccontextmanager
@@ -68,10 +58,6 @@ async def serve_ui():
 
 
 # ── models ────────────────────────────────────
-# NOTE: ChatRequest Pydantic model is REMOVED for /chat
-# because that endpoint now uses Form fields (multipart).
-# The other models stay exactly the same.
-
 class NewThreadResponse(BaseModel):
     thread_id: str
 
@@ -122,9 +108,10 @@ def _try_parse(content) -> Optional[dict]:
     return None
 
 
+JOB_TOOLS = {"linkedin_job_search", "file_job_search"}
+
 def _is_job_tool(name: str) -> bool:
-    name = (name or "").lower()
-    return "job" in name or "linkedin" in name
+    return (name or "").lower() in JOB_TOOLS
 
 
 def _build_response(result: dict, thread_id: str) -> dict:
@@ -169,6 +156,43 @@ def _build_response(result: dict, thread_id: str) -> dict:
 
     logger.info("FALLBACK: returning plain text")
     return {"response_type": "text", "answer": ai_text, "thread_id": thread_id}
+
+
+# ── file handling ─────────────────────────────
+async def file_handling(files) -> list[str]:
+    """
+    Skips images, saves all other files to uploads/.
+    Replaces if same filename already exists.
+    Returns list of saved filenames.
+    """
+    saved_filenames: list[str] = []
+
+    for upload in files:
+        if not upload.filename:
+            continue
+
+        # skip images
+        if upload.content_type and upload.content_type.startswith("image/"):
+            logger.info("Skipping image: %s", upload.filename)
+            continue
+
+        content = await upload.read()
+
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{upload.filename}' exceeds the 10 MB limit."
+            )
+
+        # save — overwrites automatically if same filename exists
+        dest = UPLOAD_DIR / upload.filename
+        with open(dest, "wb") as f:
+            f.write(content)
+
+        saved_filenames.append(upload.filename)
+        logger.info("Saved/Replaced: %s (%.2f KB)", dest, len(content) / 1024)
+
+    return saved_filenames
 
 
 # ── routes ────────────────────────────────────
@@ -216,56 +240,33 @@ async def get_thread_label(thread_id: str):
     label = await backend.get_thread_label(thread_id)
     return {"label": label}
 
-async def file_handling(files):
-    saved_paths: list[str] = []
-    for upload in files:
-        if not upload.filename:
-            continue
-        print("-==--=-=-==-=-__dict__-=-=-=-=-=",upload.__dict__)
-        if upload.content_type=='image/jpeg':  # this is the future development
-            continue
-    
-        content = await upload.read()
-        # enforce 10 MB limit
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File '{upload.filename}' exceeds the 10 MB limit."
-            )
-        # save original file as-is to disk
-        safe_name = f"{uuid.uuid4().hex}_{upload.filename}"
-        dest = UPLOAD_DIR / safe_name
-        with open(dest, "wb") as f:        # ← wb = write binary, saves exactly as original
-            f.write(content)
 
-        saved_paths.append(str(dest))
-        logger.info("File saved: (%.2f KB)",  len(content) / 1024)
-    return saved_paths
-    
-
-# ── /chat  (CHANGED: now accepts multipart/form-data) ─────────────────────────  ← NEW
+# ── /chat ─────────────────────────────────────
 @app.post("/chat")
 async def chat(
-    query:      str             = Form(...),           # ← NEW  text field
-    thread_id:  str             = Form(...),           # ← NEW  text field
-    web_search: bool            = Form(False),         # ← NEW  text field
-    user_id:    str             = Form("default_user"),# ← NEW  text field
-    files: List[UploadFile]     = File(default=[]),    # ← NEW  optional file list
+    query:      str           = Form(...),
+    thread_id:  str           = Form(...),
+    web_search: bool          = Form(False),
+    user_id:    str           = Form("default_user"),
+    files: List[UploadFile]   = File(default=[]),
 ):
     if backend.chatbot is None:
         raise HTTPException(status_code=503, detail="Agent not ready. Is MCP running?")
 
-    # ── save uploaded files and build a list of saved paths ──────────────────  ← NEW
-    saved_paths=await file_handling(files)
-    # ── only pass file PATH to agent, not file content ──
-    user_message = query
-    if saved_paths:
-        file_note = "\n\n[Attached files — give the summery of this of file to user and give the summry in the response if do not ask any things other hand if they ask any things from this file then give the response from this file ]\n" + "\n".join(
-            f"- {p}" for p in saved_paths
-        )
-        user_message = query + file_note
+    # save uploaded files — tools handle extraction internally
+    saved_filenames = await file_handling(files)
 
-    print(user_message)
+    # build agent message — just pass filenames, tools do the rest
+    user_message = query
+    if saved_filenames:
+        user_message = (
+            f"{query}\n\n"
+            f"[UPLOADED FILES: {', '.join(saved_filenames)}]\n"
+            f"Use these filenames when calling any file-related tools."
+        )
+
+    logger.info("Agent message preview:\n%s", user_message[:400])
+
     config = {"configurable": {"thread_id": thread_id}}
     try:
         result = await backend.chatbot.ainvoke(
@@ -280,6 +281,10 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
     response = _build_response(result, thread_id)
-    logger.info("web_search=%s  files=%d  response_type=%s",
-                web_search, len(saved_paths), response.get("response_type"))
+    logger.info(
+        "web_search=%s  files=%s  response_type=%s",
+        web_search,
+        saved_filenames,
+        response.get("response_type"),
+    )
     return response
