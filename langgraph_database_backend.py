@@ -23,7 +23,7 @@ from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import RemoveMessage
-from prompt import linkedin_prompt   # your existing system-prompt string
+from prompt import main_prompt   # your existing system-prompt string
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ async def init_agent() -> None:
     chatbot = create_agent(
         model=_load_llm(),
         tools=tools,
-        system_prompt=linkedin_prompt,  
+        system_prompt=main_prompt,  
         checkpointer=checkpointer,
         name="iprocess_agent",
     )
