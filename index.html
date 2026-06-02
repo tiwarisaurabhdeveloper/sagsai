@@ -230,10 +230,10 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
         <img src="/static/sagsai.jpeg" alt="SAGS AI" onerror="this.parentElement.innerHTML='🤖'">
       </div>
       <h2>What can I help with?</h2>
-      <p>Powered by AI — job search, web search, stock prices & calculations.</p>
+      <p>Powered by AI — job search, web search, Check ATS Score and Suggestion for Better Resume. </p>
       <div class="chips">
         <div class="chip" onclick="setInput('Find AI ML Engineer jobs in Noida posted today')">💼 AI/ML jobs in Noida</div>
-        <div class="chip" onclick="setInput('write an latest AI news today to post on LinkedIN')">🌐 Latest AI news Automate Post on LinkedIN</div>
+        <!-- <div class="chip" onclick="setInput('write an latest AI news today to post on LinkedIN')">🌐 Latest AI news Automate Post on LinkedIN</div> -->
       </div>
     </div>
   </div>
@@ -287,8 +287,10 @@ let currentThreadId = null;
 let isLoading = false;
 let threadLabels = {};
 let webSearchEnabled = false;
-let attachedFiles = [];   // stores File objects
+let attachedFiles = [];
 let sidebarOpen = true;
+
+const BOT_API = 'http://localhost:8001';  // ← ADD THIS
 
 if (window.innerWidth <= 768) {
   sidebarOpen = false;
@@ -402,7 +404,7 @@ async function init() {
 
 async function loadThreadList() {
   try {
-    const res  = await fetch('/threads');
+    const res  = await fetch(BOT_API + '/threads');
     const data = await res.json();
     const threads = data.threads || [];
     await loadThreadLabels(threads);
@@ -411,8 +413,9 @@ async function loadThreadList() {
 }
 
 async function saveThreadLabel(tid, label) {
+  if (!tid) return;   // ← ADD THIS
   try {
-    await fetch(`/threads/${tid}/label`, {
+    await fetch(`${BOT_API}/threads/${tid}/label`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ label })
@@ -423,7 +426,7 @@ async function saveThreadLabel(tid, label) {
 async function loadThreadLabels(threads) {
   try {
     const results = await Promise.all(
-      threads.map(tid => fetch(`/threads/${tid}/label`).then(r => r.json()).catch(() => ({ label: '' })))
+      threads.map(tid => fetch(`${BOT_API}/threads/${tid}/label`).then(r => r.json()).catch(() => ({ label: '' })))
     );
     threads.forEach((tid, i) => { if (results[i].label) threadLabels[tid] = results[i].label; });
   } catch {}
@@ -453,7 +456,7 @@ function setActiveThread(tid) {
 
 async function startNewChat() {
   try {
-    const res  = await fetch('/threads/new');
+    const res  = await fetch(BOT_API + '/threads/new');
     const data = await res.json();
     currentThreadId = data.thread_id;
   } catch {
@@ -478,7 +481,7 @@ async function loadThread(tid) {
   const msgs = document.getElementById('messages');
   msgs.innerHTML = '<div class="typing-row" style="margin:auto"><div class="typing-bubble"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';
   try {
-    const res  = await fetch(`/threads/${tid}/messages`);
+    const res  = await fetch(`${BOT_API}/threads/${tid}/messages`);
     const data = await res.json();
     msgs.innerHTML = '';
     if (!data.messages || !data.messages.length) { msgs.appendChild(buildWelcomeScreen()); return; }
@@ -541,7 +544,7 @@ async function sendMessage() {
     // attach every file the user selected
     attachedFiles.forEach(file => fd.append('files', file, file.name));
 
-    const res = await fetch('/chat', {
+    const res = await fetch(BOT_API + '/chat', {
       method: 'POST',
       // Do NOT set Content-Type — the browser sets it with the correct boundary
       body: fd,
@@ -700,10 +703,9 @@ function buildWelcomeScreen() {
   div.innerHTML = `
     <div class="welcome-icon"><img src="/static/sagsai.jpeg" alt="SAGS AI" onerror="this.parentElement.innerHTML='🤖'"></div>
     <h2>What can I help with?</h2>
-    <p>Powered by AI — job search, web search, stock prices & calculations.</p>
+    <p>Powered by AI — job search, web search, Check ATS Score and Suggestion for Better Resume. </p>
     <div class="chips">
       <div class="chip" onclick="setInput('Find AI ML Engineer jobs in Noida posted today')">💼 AI/ML jobs in Noida</div>
-      <div class="chip" onclick="setInput('write an latest AI news today to post on LinkedIN')">🌐 Latest AI news Automate Post on LinkedIN</div>
     </div>`;
   return div;
 }

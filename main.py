@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ── upload folder ─────────────────────────────
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 10 MB
 
 
 # ── lifespan ──────────────────────────────────
