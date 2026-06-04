@@ -25,7 +25,8 @@ ENDPOINTS:
   GET  /auth/health              → health check
 """
 
-import os, sqlite3, logging, re, random, string, smtplib, bcrypt
+# import os, sqlite3, logging, re, random, string, smtplib, bcrypt
+import os, sqlite3, logging, re, random, string, smtplib, bcrypt, aiosqlite
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -36,8 +37,10 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, validator
 from jose import JWTError, jwt
+import json
 
 # Load .env file if present
 try:
@@ -101,59 +104,61 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 # ── DATABASE ──────────────────────────────────────────────────────────────────
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+async def get_db():
+    return await aiosqlite.connect(DB_PATH)
 
-def init_db():
-    conn = get_db()
-    c    = conn.cursor()
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            first_name    TEXT    NOT NULL,
-            last_name     TEXT    NOT NULL,
-            email         TEXT    UNIQUE,
-            phone         TEXT    UNIQUE,
-            password_hash TEXT,
-            google_id     TEXT    UNIQUE,
-            avatar_url    TEXT,
-            is_verified   INTEGER DEFAULT 0,
-            created_at    TEXT    DEFAULT (datetime('now')),
-            updated_at    TEXT    DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS otps (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            target     TEXT NOT NULL,
-            otp_code   TEXT NOT NULL,
-            purpose    TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            used       INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER NOT NULL,
-            token_hash TEXT    NOT NULL,
-            created_at TEXT    DEFAULT (datetime('now')),
-            expires_at TEXT    NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-    """)
-    conn.commit()
-    conn.close()
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_name    TEXT    NOT NULL,
+                last_name     TEXT    NOT NULL,
+                email         TEXT    UNIQUE,
+                phone         TEXT    UNIQUE,
+                password_hash TEXT,
+                google_id     TEXT    UNIQUE,
+                avatar_url    TEXT,
+                is_verified   INTEGER DEFAULT 0,
+                created_at    TEXT    DEFAULT (datetime('now')),
+                updated_at    TEXT    DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS otps (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                target     TEXT NOT NULL,
+                otp_code   TEXT NOT NULL,
+                purpose    TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used       INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                token_hash TEXT    NOT NULL,
+                created_at TEXT    DEFAULT (datetime('now')),
+                expires_at TEXT    NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS pending_registrations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                token      TEXT    NOT NULL UNIQUE,
+                data       TEXT    NOT NULL,
+                expires_at TEXT    NOT NULL,
+                created_at TEXT    DEFAULT (datetime('now'))
+            );
+        """)
+        await conn.commit()
     logger.info("✅ Database ready: %s", DB_PATH)
-
 # ── APP ───────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    await init_db()
     yield
 
 app = FastAPI(title="SAGS AI Auth", version="2.0.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="statics"), name="static")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -207,9 +212,10 @@ class SendOtpRequest(BaseModel):
     purpose: str   # "verify" | "forgot_password" | "login"
 
 class VerifyOtpRequest(BaseModel):
-    target:   str
-    otp_code: str
-    purpose:  str
+    target:        str
+    otp_code:      str
+    purpose:       str
+    pending_token: Optional[str] = None   # ← add this line
 
 class ResetPasswordRequest(BaseModel):
     target:       str
@@ -233,41 +239,41 @@ class TokenResponse(BaseModel):
 def generate_otp(length: int = 6) -> str:
     return "".join(random.choices(string.digits, k=length))
 
-def store_otp(target: str, otp: str, purpose: str):
-    conn = get_db()
-    # Invalidate old OTPs for same target+purpose
-    conn.execute("UPDATE otps SET used=1 WHERE target=? AND purpose=? AND used=0", (target, purpose))
-    expires_at = (datetime.utcnow() + timedelta(minutes=OTP_TTL_MINUTES)).isoformat()
-    conn.execute(
-        "INSERT INTO otps (target, otp_code, purpose, expires_at) VALUES (?,?,?,?)",
-        (target, otp, purpose, expires_at)
-    )
-    conn.commit()
-    conn.close()
+async def store_otp(target: str, otp: str, purpose: str):
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        expires_at = (datetime.utcnow() + timedelta(minutes=OTP_TTL_MINUTES)).isoformat()
+        await conn.execute(
+            "UPDATE otps SET used=1 WHERE target=? AND purpose=? AND used=0",
+            (target, purpose)
+        )
+        await conn.execute(
+            "INSERT INTO otps (target, otp_code, purpose, expires_at) VALUES (?,?,?,?)",
+            (target, otp, purpose, expires_at)
+        )
+        await conn.commit()
 
-def validate_otp(target: str, otp_code: str, purpose: str) -> bool:
-    conn = get_db()
-    row  = conn.execute("""
-        SELECT id FROM otps
-        WHERE target=? AND otp_code=? AND purpose=? AND used=0
-          AND expires_at > datetime('now')
-        ORDER BY created_at DESC LIMIT 1
-    """, (target, otp_code, purpose)).fetchone()
-    if row:
-        conn.execute("UPDATE otps SET used=1 WHERE id=?", (row["id"],))
-        conn.commit()
-        conn.close()
-        return True
-    conn.close()
-    return False
+async def validate_otp(target: str, otp_code: str, purpose: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("""
+            SELECT id FROM otps
+            WHERE target=? AND otp_code=? AND purpose=? AND used=0
+              AND expires_at > datetime('now')
+            ORDER BY created_at DESC LIMIT 1
+        """, (target, otp_code, purpose)) as cur:
+            row = await cur.fetchone()
+        if row:
+            await conn.execute("UPDATE otps SET used=1 WHERE id=?", (row["id"],))
+            await conn.commit()
+            return True
+        return False
 
 # ── EMAIL OTP ─────────────────────────────────────────────────────────────────
-def send_otp_email(to_email: str, otp: str, purpose: str):
-    """
-    Send OTP email via SMTP.
-    Uses SMTP_USER + SMTP_PASSWORD from .env
-    For Gmail: create an App Password at https://myaccount.google.com/apppasswords
-    """
+import asyncio
+import aiosmtplib
+
+async def send_otp_email(to_email: str, otp: str, purpose: str):
     subject_map = {
         "verify":          "SAGS AI — Verify your email",
         "forgot_password": "SAGS AI — Password reset code",
@@ -285,7 +291,6 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
       <table width="480" cellpadding="0" cellspacing="0"
              style="background:#ffffff;border-radius:16px;overflow:hidden;
                     box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-        <!-- Header -->
         <tr>
           <td style="background:linear-gradient(135deg,#4f46e5,#0ea5e9);
                      padding:28px 40px;text-align:center;">
@@ -295,18 +300,14 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
             </span>
           </td>
         </tr>
-        <!-- Body -->
         <tr>
           <td style="padding:40px;">
-            <p style="font-size:16px;color:#374151;margin:0 0 8px;">
-              Hello,
-            </p>
+            <p style="font-size:16px;color:#374151;margin:0 0 8px;">Hello,</p>
             <p style="font-size:15px;color:#6b7280;margin:0 0 32px;line-height:1.6;">
               {'Here is your email verification code.' if purpose == 'verify'
                else 'Use this code to reset your password.' if purpose == 'forgot_password'
                else 'Use this code to sign in to SAGS AI.'}
             </p>
-            <!-- OTP box -->
             <div style="background:#f0f1f3;border:1.5px solid #e5e7eb;
                         border-radius:12px;padding:28px;text-align:center;
                         margin-bottom:32px;">
@@ -321,7 +322,6 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
             </p>
           </td>
         </tr>
-        <!-- Footer -->
         <tr>
           <td style="background:#f9fafb;border-top:1px solid #f0f1f3;
                      padding:18px 40px;text-align:center;">
@@ -337,7 +337,6 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
 </html>
 """
 
-    # ── DEV MODE: print OTP if SMTP not configured ──
     if not SMTP_USER or not SMTP_PASSWORD:
         logger.info("=" * 50)
         logger.info("⚡ DEV MODE — OTP for %s: %s", to_email, otp)
@@ -345,43 +344,48 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
         logger.info("=" * 50)
         return
 
-    # ── REAL EMAIL SEND ──
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"]      = subject
-        msg["From"]         = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
-        msg["To"]           = to_email
-        msg["X-Priority"]   = "1"
+        msg["Subject"] = subject
+        msg["From"]    = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        msg["To"]      = to_email
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM_EMAIL, to_email, msg.as_bytes())
+        import ssl
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
 
+        await aiosmtplib.send(
+            msg,
+            hostname=SMTP_HOST,
+            port=SMTP_PORT,
+            username=SMTP_USER,
+            password=SMTP_PASSWORD,
+            start_tls=True,
+            tls_context=ssl_ctx,
+        )
         logger.info("✅ OTP email sent to %s", to_email)
 
-    except smtplib.SMTPAuthenticationError:
+    except aiosmtplib.SMTPAuthenticationError:
         logger.error("❌ SMTP auth failed — check SMTP_USER and SMTP_PASSWORD in .env")
-        logger.info("   For Gmail, use an App Password (not your account password)")
-        logger.info("   Generate at: https://myaccount.google.com/apppasswords")
         raise HTTPException(500, "Email authentication failed. Check server SMTP config.")
     except Exception as e:
         logger.error("❌ Email send error: %s", e)
         raise HTTPException(500, f"Failed to send OTP email: {e}")
 
-def send_otp_sms(phone: str, otp: str):
-    """Send OTP via Twilio SMS (optional)."""
+
+async def send_otp_sms(phone: str, otp: str):
     if TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM:
         try:
-            from twilio.rest import Client
-            client = Client(TWILIO_SID, TWILIO_TOKEN)
-            client.messages.create(
-                body=f"Your SAGS AI code: {otp}. Expires in {OTP_TTL_MINUTES} minutes.",
-                from_=TWILIO_FROM,
-                to=phone,
+            await asyncio.to_thread(
+                lambda: __import__('twilio.rest', fromlist=['Client'])
+                        .Client(TWILIO_SID, TWILIO_TOKEN)
+                        .messages.create(
+                            body=f"Your SAGS AI code: {otp}. Expires in {OTP_TTL_MINUTES} minutes.",
+                            from_=TWILIO_FROM,
+                            to=phone,
+                        )
             )
             logger.info("✅ OTP SMS sent to %s", phone)
         except Exception as e:
@@ -393,15 +397,17 @@ def send_otp_sms(phone: str, otp: str):
         logger.info("   Set TWILIO_* vars in .env to send real SMS")
         logger.info("=" * 50)
 
+
 # ── AUTH DEPENDENCY ───────────────────────────────────────────────────────────
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     payload = decode_token(credentials.credentials)
     user_id = int(payload["sub"])
-    conn    = get_db()
-    user    = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    conn.close()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM users WHERE id=?", (user_id,)) as cur:
+            user = await cur.fetchone()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return dict(user)
@@ -417,51 +423,64 @@ def user_to_dict(user) -> dict:
 async def health():
     return {"status": "ok", "service": "SAGS AI Auth v2.0"}
 
-@app.post("/auth/register", response_model=TokenResponse)
+
+@app.post("/auth/register")
 async def register(req: RegisterRequest):
     if not req.email and not req.phone:
         raise HTTPException(400, "Provide at least an email or phone number")
 
-    conn = get_db()
-    if req.email:
-        if conn.execute("SELECT id FROM users WHERE email=?", (req.email,)).fetchone():
-            conn.close()
-            raise HTTPException(400, "Email already registered")
-    if req.phone:
-        if conn.execute("SELECT id FROM users WHERE phone=?", (req.phone,)).fetchone():
-            conn.close()
-            raise HTTPException(400, "Phone already registered")
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        if req.email:
+            async with conn.execute("SELECT id FROM users WHERE email=?", (req.email,)) as cur:
+                if await cur.fetchone():
+                    raise HTTPException(400, "Email already registered")
+        if req.phone:
+            async with conn.execute("SELECT id FROM users WHERE phone=?", (req.phone,)) as cur:
+                if await cur.fetchone():
+                    raise HTTPException(400, "Phone already registered")
 
-    pw_hash = hash_password(req.password)
-    cursor  = conn.execute(
-        "INSERT INTO users (first_name, last_name, email, phone, password_hash) VALUES (?,?,?,?,?)",
-        (req.first_name, req.last_name, req.email, req.phone, pw_hash)
-    )
-    user_id = cursor.lastrowid
-    conn.commit()
-    user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    conn.close()
+        import secrets as _secrets
+        pending_token = _secrets.token_urlsafe(32)
+        pending_data  = json.dumps({
+            "first_name":    req.first_name,
+            "last_name":     req.last_name,
+            "email":         req.email,
+            "phone":         req.phone,
+            "password_hash": hash_password(req.password),
+        })
+        expires_at = (datetime.utcnow() + timedelta(minutes=OTP_TTL_MINUTES + 5)).isoformat()
+        await conn.execute(
+            "DELETE FROM pending_registrations WHERE data LIKE ?",
+            (f'%"{req.email or req.phone}"%',)
+        )
+        await conn.execute(
+            "INSERT INTO pending_registrations (token, data, expires_at) VALUES (?,?,?)",
+            (pending_token, pending_data, expires_at)
+        )
+        await conn.commit()
 
-    # Auto-send verification OTP if email provided
-    if req.email:
-        try:
-            otp = generate_otp()
-            store_otp(req.email, otp, "verify")
-            send_otp_email(req.email, otp, "verify")
-        except Exception as e:
-            logger.warning("OTP send failed (non-fatal): %s", e)
+    target = req.email if req.email else req.phone
+    otp    = generate_otp()
+    await store_otp(target, otp, "verify")
+    if "@" in target:
+        await send_otp_email(target, otp, "verify")
+    else:
+        await send_otp_sms(target, otp)
 
-    token = create_access_token(user_id, req.email)
-    return {"access_token": token, "user": user_to_dict(user)}
+    return {"pending": True, "pending_token": pending_token,
+            "message": f"OTP sent to {target}. Verify to complete registration."}
+
 
 @app.post("/auth/login", response_model=TokenResponse)
 async def login(req: LoginRequest):
-    conn = get_db()
-    user = conn.execute(
-        "SELECT * FROM users WHERE email=? OR phone=?",
-        (req.identifier.strip(), req.identifier.strip())
-    ).fetchone()
-    conn.close()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM users WHERE email=? OR phone=?",
+            (req.identifier.strip(), req.identifier.strip())
+        ) as cur:
+            user = await cur.fetchone()
 
     if not user:
         raise HTTPException(404, "No account found. Please create an account first.")
@@ -472,6 +491,7 @@ async def login(req: LoginRequest):
 
     token = create_access_token(user["id"], user["email"])
     return {"access_token": token, "user": user_to_dict(user)}
+
 
 @app.post("/auth/google", response_model=TokenResponse)
 async def google_auth(req: GoogleAuthRequest):
@@ -490,103 +510,154 @@ async def google_auth(req: GoogleAuthRequest):
     last      = info.get("family_name", "")
     avatar    = info.get("picture",     "")
 
-    conn = get_db()
-    user = conn.execute(
-        "SELECT * FROM users WHERE google_id=? OR email=?", (google_id, email)
-    ).fetchone()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM users WHERE google_id=? OR email=?", (google_id, email)
+        ) as cur:
+            user = await cur.fetchone()
 
-    if user:
-        conn.execute(
-            "UPDATE users SET google_id=?, avatar_url=?, is_verified=1 WHERE id=?",
-            (google_id, avatar, user["id"])
-        )
-        conn.commit()
-        user = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
-    else:
-        cursor = conn.execute(
-            "INSERT INTO users (first_name, last_name, email, google_id, avatar_url, is_verified) VALUES (?,?,?,?,?,1)",
-            (first, last, email, google_id, avatar)
-        )
-        user = conn.execute("SELECT * FROM users WHERE id=?", (cursor.lastrowid,)).fetchone()
-        conn.commit()
+        if user:
+            await conn.execute(
+                "UPDATE users SET google_id=?, avatar_url=?, is_verified=1 WHERE id=?",
+                (google_id, avatar, user["id"])
+            )
+            await conn.commit()
+            async with conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)) as cur:
+                user = await cur.fetchone()
+        else:
+            async with conn.execute(
+                "INSERT INTO users (first_name, last_name, email, google_id, avatar_url, is_verified) VALUES (?,?,?,?,?,1)",
+                (first, last, email, google_id, avatar)
+            ) as cur:
+                new_id = cur.lastrowid
+            await conn.commit()
+            async with conn.execute("SELECT * FROM users WHERE id=?", (new_id,)) as cur:
+                user = await cur.fetchone()
 
-    conn.close()
     token = create_access_token(user["id"], email)
     return {"access_token": token, "user": user_to_dict(user)}
 
+
 @app.post("/auth/send-otp")
 async def send_otp(req: SendOtpRequest):
-    # For login purpose — verify user exists in DB first
     if req.purpose == "login":
-        conn = get_db()
-        user = conn.execute(
-            "SELECT id FROM users WHERE email=? OR phone=?",
-            (req.target, req.target)
-        ).fetchone()
-        conn.close()
-        if not user:
-            raise HTTPException(404, "No account found. Please register first.")
+        async with aiosqlite.connect(DB_PATH) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT id FROM users WHERE email=? OR phone=?", (req.target, req.target)
+            ) as cur:
+                if not await cur.fetchone():
+                    raise HTTPException(404, "No account found. Please register first.")
 
     otp = generate_otp()
-    store_otp(req.target, otp, req.purpose)
-
+    await store_otp(req.target, otp, req.purpose)
     if "@" in req.target:
-        send_otp_email(req.target, otp, req.purpose)
+        await send_otp_email(req.target, otp, req.purpose)
     else:
-        send_otp_sms(req.target, otp)
-
+        await send_otp_sms(req.target, otp)
     return {"message": f"OTP sent to {req.target}"}
+
 
 @app.post("/auth/verify-otp")
 async def verify_otp_route(req: VerifyOtpRequest):
-    if not validate_otp(req.target, req.otp_code, req.purpose):
+    if not await validate_otp(req.target, req.otp_code, req.purpose):
         raise HTTPException(400, "Invalid or expired OTP")
-    conn = get_db()
-    conn.execute(
-        "UPDATE users SET is_verified=1 WHERE email=? OR phone=?",
-        (req.target, req.target)
-    )
-    conn.commit()
-    conn.close()
+
+    if req.purpose == "verify":
+        async with aiosqlite.connect(DB_PATH) as conn:
+            conn.row_factory = aiosqlite.Row
+            row = None
+            if req.pending_token:
+                async with conn.execute(
+                    "SELECT * FROM pending_registrations WHERE token=? AND expires_at > datetime('now')",
+                    (req.pending_token,)
+                ) as cur:
+                    row = await cur.fetchone()
+            if not row:
+                async with conn.execute(
+                    "SELECT * FROM pending_registrations WHERE data LIKE ? AND expires_at > datetime('now')",
+                    (f'%{req.target}%',)
+                ) as cur:
+                    row = await cur.fetchone()
+            if not row:
+                raise HTTPException(400, "Registration session expired. Please register again.")
+
+            data = json.loads(row["data"])
+
+            if data.get("email"):
+                async with conn.execute("SELECT id FROM users WHERE email=?", (data["email"],)) as cur:
+                    if await cur.fetchone():
+                        await conn.execute("DELETE FROM pending_registrations WHERE id=?", (row["id"],))
+                        await conn.commit()
+                        raise HTTPException(400, "Email already registered")
+            if data.get("phone"):
+                async with conn.execute("SELECT id FROM users WHERE phone=?", (data["phone"],)) as cur:
+                    if await cur.fetchone():
+                        await conn.execute("DELETE FROM pending_registrations WHERE id=?", (row["id"],))
+                        await conn.commit()
+                        raise HTTPException(400, "Phone already registered")
+
+            async with conn.execute(
+                "INSERT INTO users (first_name, last_name, email, phone, password_hash, is_verified) VALUES (?,?,?,?,?,1)",
+                (data["first_name"], data["last_name"], data.get("email"), data.get("phone"), data["password_hash"])
+            ) as cur:
+                user_id = cur.lastrowid
+
+            await conn.execute("DELETE FROM pending_registrations WHERE id=?", (row["id"],))
+            await conn.commit()
+            async with conn.execute("SELECT * FROM users WHERE id=?", (user_id,)) as cur:
+                user = await cur.fetchone()
+
+        token = create_access_token(user_id, data.get("email"))
+        return {"message": "Account created and verified successfully",
+                "verified": True, "access_token": token,
+                "token_type": "bearer", "user": user_to_dict(user)}
+
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE users SET is_verified=1 WHERE email=? OR phone=?",
+            (req.target, req.target)
+        )
+        await conn.commit()
     return {"message": "OTP verified successfully", "verified": True}
+
 
 @app.post("/auth/forgot-password")
 async def forgot_password(req: SendOtpRequest):
-    conn = get_db()
-    user = conn.execute(
-        "SELECT id FROM users WHERE email=? OR phone=?",
-        (req.target, req.target)
-    ).fetchone()
-    conn.close()
-    if not user:
-        raise HTTPException(404, "No account found with this email or phone")
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT id FROM users WHERE email=? OR phone=?", (req.target, req.target)
+        ) as cur:
+            if not await cur.fetchone():
+                raise HTTPException(404, "No account found with this email or phone")
 
     otp = generate_otp()
-    store_otp(req.target, otp, "forgot_password")
-
+    await store_otp(req.target, otp, "forgot_password")
     if "@" in req.target:
-        send_otp_email(req.target, otp, "forgot_password")
+        await send_otp_email(req.target, otp, "forgot_password")
     else:
-        send_otp_sms(req.target, otp)
-
+        await send_otp_sms(req.target, otp)
     return {"message": "Password reset OTP sent"}
+
 
 @app.post("/auth/reset-password")
 async def reset_password(req: ResetPasswordRequest):
-    if not validate_otp(req.target, req.otp_code, "forgot_password"):
+    if not await validate_otp(req.target, req.otp_code, "forgot_password"):
         raise HTTPException(400, "Invalid or expired OTP")
 
     pw_hash = hash_password(req.new_password)
-    conn    = get_db()
-    result  = conn.execute(
-        "UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE email=? OR phone=?",
-        (pw_hash, req.target, req.target)
-    )
-    conn.commit()
-    conn.close()
-    if result.rowcount == 0:
-        raise HTTPException(404, "User not found")
+    async with aiosqlite.connect(DB_PATH) as conn:
+        result = await conn.execute(
+            "UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE email=? OR phone=?",
+            (pw_hash, req.target, req.target)
+        )
+        await conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(404, "User not found")
     return {"message": "Password reset successfully"}
+
 
 @app.get("/auth/me")
 async def get_me(user: dict = Depends(get_current_user)):

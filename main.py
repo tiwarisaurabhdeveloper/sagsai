@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 import langgraph_database_backend as backend
 from langgraph_database_backend import trim_memory
+from langgraph_database_backend import get_user_threads
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -140,11 +141,11 @@ def _build_response(result: dict, thread_id: str) -> dict:
         if getattr(msg, "type", "") != "tool":
             continue
         tc_id = getattr(msg, "tool_call_id", "")
-        logger.info("ToolMessage found: tool_call_id=%s  preview=%s", tc_id, str(msg.content)[:400])
+        # logger.info("ToolMessage found: tool_call_id=%s  preview=%s", tc_id, str(msg.content)[:400])
         if tc_id not in job_tool_ids:
             continue
         parsed = _try_parse(msg.content)
-        logger.info("Parsed: %s", str(parsed)[:400] if parsed else "None")
+        # logger.info("Parsed: %s", str(parsed)[:400] if parsed else "None")
         if parsed and parsed.get("type") == "jobs" and parsed.get("jobs"):
             logger.info("SUCCESS: %d job cards", len(parsed["jobs"]))
             return {
@@ -196,22 +197,33 @@ async def file_handling(files) -> list[str]:
 
 
 # ── routes ────────────────────────────────────
+# add this import at the top with other imports
+from langgraph_database_backend import get_user_threads
 
+# ── GET /threads — now scoped to user ─────────
 @app.get("/threads", response_model=ThreadListResponse)
-async def get_threads():
-    threads = await backend.retrieve_all_threads()
+async def get_threads(user_id: str = "default_user"):
+    threads = await get_user_threads(user_id)
     return {"threads": threads}
 
 
+# ── GET /threads/new — same, no change needed ──
 @app.get("/threads/new", response_model=NewThreadResponse)
 async def new_thread():
     return {"thread_id": str(uuid.uuid4())}
 
 
+# ── GET /threads/{thread_id}/messages ─────────
 @app.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
-async def get_thread_messages(thread_id: str):
+async def get_thread_messages(thread_id: str, user_id: str = "default_user"):
     if backend.chatbot is None:
         raise HTTPException(status_code=503, detail="Agent not ready.")
+
+    # security check — only owner can read their thread
+    owner = await _get_thread_owner(thread_id)
+    if owner and owner != user_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
     try:
         state = await backend.chatbot.aget_state(
             config={"configurable": {"thread_id": thread_id}}
@@ -229,34 +241,34 @@ async def get_thread_messages(thread_id: str):
     return {"messages": messages}
 
 
+# ── POST /threads/{thread_id}/label ───────────
 @app.post("/threads/{thread_id}/label")
-async def set_thread_label(thread_id: str, payload: ThreadLabelRequest):
-    await backend.save_thread_label(thread_id, payload.label)
+async def set_thread_label(thread_id: str, payload: ThreadLabelRequest, user_id: str = "default_user"):
+    await backend.save_thread_label(thread_id, payload.label, user_id)
     return {"ok": True}
 
 
+# ── GET /threads/{thread_id}/label ────────────
 @app.get("/threads/{thread_id}/label")
 async def get_thread_label(thread_id: str):
     label = await backend.get_thread_label(thread_id)
     return {"label": label}
 
 
-# ── /chat ─────────────────────────────────────
+# ── /chat — pass user_id through ──────────────
 @app.post("/chat")
 async def chat(
     query:      str           = Form(...),
     thread_id:  str           = Form(...),
     web_search: bool          = Form(False),
-    user_id:    str           = Form("default_user"),
+    user_id:    str           = Form("default_user"),   # ← already exists, no change
     files: List[UploadFile]   = File(default=[]),
 ):
     if backend.chatbot is None:
         raise HTTPException(status_code=503, detail="Agent not ready. Is MCP running?")
 
-    # save uploaded files — tools handle extraction internally
     saved_filenames = await file_handling(files)
 
-    # build agent message — just pass filenames, tools do the rest
     user_message = query
     if saved_filenames:
         user_message = (
@@ -281,10 +293,16 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
     response = _build_response(result, thread_id)
-    logger.info(
-        "web_search=%s  files=%s  response_type=%s",
-        web_search,
-        saved_filenames,
-        response.get("response_type"),
-    )
+    logger.info("web_search=%s  files=%s  response_type=%s  user=%s",
+                web_search, saved_filenames, response.get("response_type"), user_id)
     return response
+
+
+# ── helper — get thread owner ─────────────────
+async def _get_thread_owner(thread_id: str) -> str | None:
+    async with backend.get_db_conn() as conn:
+        async with conn.execute(
+            "SELECT user_id FROM thread_labels WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None

@@ -224,23 +224,23 @@ input.err{border-color:var(--red)!important}
 
 .navbar{
   position:fixed;top:0;left:0;right:0;z-index:200;
-  height:62px;background:rgba(255,255,255,.92);
+  height:62px;
+  background:linear-gradient(135deg,#1e1b4b 0%,#312e81 40%,#1e40af 100%);
   backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  border-bottom:1px solid var(--border);
+  border-bottom:1px solid rgba(255,255,255,0.08);
   display:flex;align-items:center;padding:0 28px;
-  box-shadow:0 1px 12px rgba(0,0,0,.05)
+  box-shadow:0 2px 20px rgba(79,70,229,.35)
 }
 .nav-brand{display:flex;align-items:center;gap:9px;
   font-family:var(--font-h);font-size:18px;font-weight:800}
 .nav-brand-ico{width:30px;height:30px;border-radius:8px;
   background:linear-gradient(135deg,var(--accent),var(--sky));
   display:flex;align-items:center;justify-content:center;font-size:14px}
-.nav-brand-txt{background:linear-gradient(135deg,var(--accent),var(--sky));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-brand-txt{color:#ffffff;-webkit-text-fill-color:#ffffff}
 .nav-sp{flex:1}
 .nav-user{
   display:flex;align-items:center;gap:9px;
-  background:var(--surface2);border:1px solid var(--border);
+  background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.18);
   border-radius:40px;padding:5px 14px 5px 6px
 }
 .nav-av{
@@ -251,13 +251,16 @@ input.err{border-color:var(--red)!important}
   overflow:hidden;flex-shrink:0
 }
 .nav-av img{width:100%;height:100%;object-fit:cover}
-.nav-uname{font-size:13px;font-weight:500;color:var(--text)}
+.nav-uname{font-size:13px;font-weight:500;color:rgba(255,255,255,0.9)}
 .btn-out{
-  background:none;border:1.5px solid var(--border2);border-radius:9px;
-  color:var(--muted);padding:6px 14px;font-size:13px;cursor:pointer;
-  font-family:var(--font-b);margin-left:10px;transition:all .2s
+  background:rgba(255,255,255,0.10);border:1.5px solid rgba(255,255,255,0.20);
+  border-radius:9px;color:rgba(255,255,255,0.85);padding:6px 14px;font-size:13px;
+  cursor:pointer;font-family:var(--font-b);margin-left:10px;transition:all .2s
 }
-.btn-out:hover{border-color:var(--red);color:var(--red)}
+.btn-out:hover{
+  background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.5);
+  color:#fca5a5
+}
 
 .home-main{flex:1;padding-top:62px}
 
@@ -659,7 +662,8 @@ input.err{border-color:var(--red)!important}
 <div id="page-home" class="page">
 
   <nav class="navbar">
-    <div class="nav-brand">
+    <div class="nav-brand" onclick="window.scrollTo({top:0,behavior:'smooth'})"
+         style="cursor:pointer" title="Go to top">
       <div class="nav-brand-ico">✦</div>
       <span class="nav-brand-txt">SAGS AI</span>
     </div>
@@ -731,7 +735,7 @@ input.err{border-color:var(--red)!important}
 <!-- ══════════════ SCRIPTS ══════════════ -->
 <script>
 /* ─── CONFIG ─────────────────────────────────────────── */
-var API   = 'http://localhost:8002';
+var API = window.location.origin.startsWith('file') ? 'http://127.0.0.1:8002' : window.location.origin;
 var BOT   = '/main_bot';              // iframe src for bot
 var GCID  = '';                       // Set your Google Client ID here to enable Google login
 
@@ -904,16 +908,16 @@ function doRegister() {
 
   api('/auth/register','POST', body)
     .then(function(d){
-  // Save temporarily — do NOT call onAuth yet
-  pendingAuth = d;
-  if (body.email) {
-    goToOtp(body.email, 'verify', 'page-register',
-      'We sent a 6-digit code to ' + body.email + '. Verify to complete registration.');
-  } else if (body.phone) {
-    goToOtp(body.phone, 'verify', 'page-register',
-      'We sent a 6-digit code to ' + body.phone + '. Verify to complete registration.');
-  }
-})
+    pendingAuth  = null;          // no auth yet — user not created
+    pendingToken = d.pending_token || null;
+    if (body.email) {
+      goToOtp(body.email, 'verify', 'page-register',
+        'We sent a 6-digit code to ' + body.email + '. Verify to complete registration.');
+    } else if (body.phone) {
+      goToOtp(body.phone, 'verify', 'page-register',
+        'We sent a 6-digit code to ' + body.phone + '. Verify to complete registration.');
+    }
+  })
 .catch(function(e){
   setLoading('btn-reg', false, 'Create Account →');
   showAlert('reg-alert','reg-alert-msg', e.message);
@@ -1035,20 +1039,28 @@ function doVerifyOtp() {
   hideAlert('otp-alert');
   setLoading('btn-otp', true);
 
-  api('/auth/verify-otp','POST',{ target:otpCtx.target, otp_code:code, purpose:otpCtx.purpose })
-    .then(function(){
+  api('/auth/verify-otp','POST',{
+  target:        otpCtx.target,
+  otp_code:      code,
+  purpose:       otpCtx.purpose,
+  pending_token: pendingToken || undefined   // ← add this
+})
+.then(function(d){
   setLoading('btn-otp', false, 'Verify Code →');
   if (otpCtx.purpose === 'forgot_password') {
     resetCtx = { target:otpCtx.target, otp_code:code };
     showPage('page-reset');
   } else {
-    // OTP verified — NOW save session and go home
-    if (pendingAuth) {
+    // d now contains access_token + user directly from verify endpoint
+    if (d.access_token) {
+      onAuth(d);          // ← use the token returned by verify-otp
+    } else if (pendingAuth) {
       onAuth(pendingAuth);
       pendingAuth = null;
     } else {
       showPage('page-home');
     }
+    pendingToken = null;
   }
 })
     .catch(function(e){
