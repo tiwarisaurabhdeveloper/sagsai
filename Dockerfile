@@ -9,6 +9,7 @@ RUN pip install -r requirements.txt
 RUN chmod +x start.sh
 
 EXPOSE 8001
+EXPOSE 8002
 EXPOSE 8004
 
 CMD [ "./start.sh" ]

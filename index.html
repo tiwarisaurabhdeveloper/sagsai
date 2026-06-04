@@ -290,7 +290,7 @@ let webSearchEnabled = false;
 let attachedFiles = [];
 let sidebarOpen = true;
 
-const BOT_API = 'http://localhost:8001';  // ← ADD THIS
+const BOT_API = window.location.origin.startsWith('file') ? 'http://127.0.0.1:8001' : window.location.origin.replace(':8002', ':8001');
 
 if (window.innerWidth <= 768) {
   sidebarOpen = false;
@@ -395,7 +395,19 @@ function toggleWebSearch() {
     if (badge) badge.remove();
   }
 }
-
+// ── get user_id from parent window JWT ────────
+function getUserId() {
+  try {
+    // auth_bot.html stores user in localStorage
+    var u = localStorage.getItem('sags_user');
+    if (u) {
+      var parsed = JSON.parse(u);
+      return String(parsed.id || parsed.email || 'default_user');
+    }
+  } catch(e) {}
+  return 'default_user';
+}
+var CURRENT_USER_ID = getUserId();
 /* ── Threads ── */
 async function init() {
   await loadThreadList();
@@ -404,7 +416,7 @@ async function init() {
 
 async function loadThreadList() {
   try {
-    const res  = await fetch(BOT_API + '/threads');
+    const res  = await fetch(`${BOT_API}/threads?user_id=${encodeURIComponent(CURRENT_USER_ID)}`);
     const data = await res.json();
     const threads = data.threads || [];
     await loadThreadLabels(threads);
@@ -413,9 +425,9 @@ async function loadThreadList() {
 }
 
 async function saveThreadLabel(tid, label) {
-  if (!tid) return;   // ← ADD THIS
+  if (!tid) return;
   try {
-    await fetch(`${BOT_API}/threads/${tid}/label`, {
+    await fetch(`${BOT_API}/threads/${tid}/label?user_id=${encodeURIComponent(CURRENT_USER_ID)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ label })
@@ -481,7 +493,7 @@ async function loadThread(tid) {
   const msgs = document.getElementById('messages');
   msgs.innerHTML = '<div class="typing-row" style="margin:auto"><div class="typing-bubble"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';
   try {
-    const res  = await fetch(`${BOT_API}/threads/${tid}/messages`);
+    const res  = await fetch(`${BOT_API}/threads/${tid}/messages?user_id=${encodeURIComponent(CURRENT_USER_ID)}`);
     const data = await res.json();
     msgs.innerHTML = '';
     if (!data.messages || !data.messages.length) { msgs.appendChild(buildWelcomeScreen()); return; }
@@ -540,7 +552,8 @@ async function sendMessage() {
     fd.append('query',      text);
     fd.append('thread_id',  currentThreadId);
     fd.append('web_search', webSearchEnabled ? 'true' : 'false');
-    fd.append('user_id',    'default_user');
+    fd.append('user_id', CURRENT_USER_ID);
+    // fd.append('user_id',    'default_user');
     // attach every file the user selected
     attachedFiles.forEach(file => fd.append('files', file, file.name));
 

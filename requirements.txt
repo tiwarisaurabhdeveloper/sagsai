@@ -28,6 +28,7 @@ aiofile==3.11.1
 aiohappyeyeballs==2.6.2
 aiohttp==3.13.5
 aiosignal==1.4.0
+aiosmtplib==5.1.1
 aiosqlite==0.22.1
 annotated-doc==0.0.4
 annotated-types==0.7.0
