@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Start Redis
-redis-stack-server &
-
 echo "Starting MCP Server..."
 
 # Start MCP Server
@@ -13,4 +10,10 @@ sleep 1
 echo "Starting FastAPI..."
 
 # Start Main App
-exec uvicorn main:app --host 0.0.0.0 --port 8001
+exec uvicorn main:app --host 0.0.0.0 --port 8001 --reload &
+
+
+echo "Starting Auth API..."
+
+# Start Auth App
+uvicorn auth:app --host 0.0.0.0 --port 8002 --reload 

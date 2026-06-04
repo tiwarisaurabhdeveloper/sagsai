@@ -1,30 +1,31 @@
 """
-main.py
-───────
-FastAPI chat server.
-
-Run:
-    uvicorn main:app --reload --port 8001
-    (your MCP server must be running on port 8004)
+main.py  — SAGS AI
 """
 
 import uuid, json, logging, ast, re
 from contextlib import asynccontextmanager
-from typing import Optional
+from pathlib import Path
+from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from langchain_core.messages import HumanMessage, AIMessage
 
 import langgraph_database_backend as backend
 from langgraph_database_backend import trim_memory
+from langgraph_database_backend import get_user_threads
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ── upload folder ─────────────────────────────
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 10 MB
 
 
 # ── lifespan ──────────────────────────────────
@@ -58,12 +59,6 @@ async def serve_ui():
 
 
 # ── models ────────────────────────────────────
-class ChatRequest(BaseModel):
-    query: str
-    thread_id: str
-    web_search: bool
-    user_id: Optional[str] = "default_user"
-
 class NewThreadResponse(BaseModel):
     thread_id: str
 
@@ -73,44 +68,35 @@ class ThreadListResponse(BaseModel):
 class ThreadMessagesResponse(BaseModel):
     messages: list[dict]
 
+class ThreadLabelRequest(BaseModel):
+    label: str
+
 
 # ── helpers ───────────────────────────────────
 
 def _try_parse(content) -> Optional[dict]:
-    """
-    Try every serialisation format LangGraph / MCP might produce.
-    Returns a dict if successful, else None.
-    """
     if isinstance(content, dict):
         return content
-
     if not isinstance(content, str):
         try:
             content = str(content)
         except Exception:
             return None
-
     content = content.strip()
     if not content:
         return None
-
-    # 1. Standard JSON
     try:
         result = json.loads(content)
         if isinstance(result, dict):
             return result
     except Exception:
         pass
-
-    # 2. Python literal — handles single-quoted dicts from str(dict)
     try:
         result = ast.literal_eval(content)
         if isinstance(result, dict):
             return result
     except Exception:
         pass
-
-    # 3. JSON/dict buried inside a larger string
     match = re.search(r'\{.*\}', content, re.DOTALL)
     if match:
         for parser in (json.loads, ast.literal_eval):
@@ -120,20 +106,19 @@ def _try_parse(content) -> Optional[dict]:
                     return result
             except Exception:
                 pass
-
     return None
 
 
+JOB_TOOLS = {"linkedin_job_search", "file_job_search"}
+
 def _is_job_tool(name: str) -> bool:
-    name = (name or "").lower()
-    return "job" in name or "linkedin" in name
+    return (name or "").lower() in JOB_TOOLS
 
 
 def _build_response(result: dict, thread_id: str) -> dict:
     messages = result.get("messages", [])
     ai_text = messages[-1].content if messages else ""
 
-    # find where current turn starts (after last HumanMessage)
     last_human_idx = None
     for i in reversed(range(len(messages))):
         if getattr(messages[i], "type", "") == "human":
@@ -141,7 +126,6 @@ def _build_response(result: dict, thread_id: str) -> dict:
             break
     recent = messages[last_human_idx + 1:] if last_human_idx is not None else messages
 
-    # collect every tool-call id that looks like a job search
     job_tool_ids: set[str] = set()
     for msg in recent:
         if getattr(msg, "type", "") == "ai":
@@ -153,23 +137,15 @@ def _build_response(result: dict, thread_id: str) -> dict:
 
     logger.info("Job tool IDs: %s", job_tool_ids)
 
-    # scan every ToolMessage and log it so you can debug
     for msg in recent:
         if getattr(msg, "type", "") != "tool":
             continue
-
         tc_id = getattr(msg, "tool_call_id", "")
-        logger.info(
-            "ToolMessage found: tool_call_id=%s  preview=%s",
-            tc_id, str(msg.content)[:400],
-        )
-
+        # logger.info("ToolMessage found: tool_call_id=%s  preview=%s", tc_id, str(msg.content)[:400])
         if tc_id not in job_tool_ids:
-            continue  # not a job tool result — skip
-
+            continue
         parsed = _try_parse(msg.content)
-        logger.info("Parsed: %s", str(parsed)[:400] if parsed else "None")
-
+        # logger.info("Parsed: %s", str(parsed)[:400] if parsed else "None")
         if parsed and parsed.get("type") == "jobs" and parsed.get("jobs"):
             logger.info("SUCCESS: %d job cards", len(parsed["jobs"]))
             return {
@@ -183,23 +159,71 @@ def _build_response(result: dict, thread_id: str) -> dict:
     return {"response_type": "text", "answer": ai_text, "thread_id": thread_id}
 
 
-# ── routes ────────────────────────────────────
+# ── file handling ─────────────────────────────
+async def file_handling(files) -> list[str]:
+    """
+    Skips images, saves all other files to uploads/.
+    Replaces if same filename already exists.
+    Returns list of saved filenames.
+    """
+    saved_filenames: list[str] = []
 
+    for upload in files:
+        if not upload.filename:
+            continue
+
+        # skip images
+        if upload.content_type and upload.content_type.startswith("image/"):
+            logger.info("Skipping image: %s", upload.filename)
+            continue
+
+        content = await upload.read()
+
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{upload.filename}' exceeds the 10 MB limit."
+            )
+
+        # save — overwrites automatically if same filename exists
+        dest = UPLOAD_DIR / upload.filename
+        with open(dest, "wb") as f:
+            f.write(content)
+
+        saved_filenames.append(upload.filename)
+        logger.info("Saved/Replaced: %s (%.2f KB)", dest, len(content) / 1024)
+
+    return saved_filenames
+
+
+# ── routes ────────────────────────────────────
+# add this import at the top with other imports
+from langgraph_database_backend import get_user_threads
+
+# ── GET /threads — now scoped to user ─────────
 @app.get("/threads", response_model=ThreadListResponse)
-async def get_threads():
-    threads = await backend.retrieve_all_threads()
+async def get_threads(user_id: str = "default_user"):
+    threads = await get_user_threads(user_id)
     return {"threads": threads}
 
 
+# ── GET /threads/new — same, no change needed ──
 @app.get("/threads/new", response_model=NewThreadResponse)
 async def new_thread():
     return {"thread_id": str(uuid.uuid4())}
 
 
+# ── GET /threads/{thread_id}/messages ─────────
 @app.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
-async def get_thread_messages(thread_id: str):
+async def get_thread_messages(thread_id: str, user_id: str = "default_user"):
     if backend.chatbot is None:
         raise HTTPException(status_code=503, detail="Agent not ready.")
+
+    # security check — only owner can read their thread
+    owner = await _get_thread_owner(thread_id)
+    if owner and owner != user_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
     try:
         state = await backend.chatbot.aget_state(
             config={"configurable": {"thread_id": thread_id}}
@@ -217,31 +241,48 @@ async def get_thread_messages(thread_id: str):
     return {"messages": messages}
 
 
-# ── add this model ──
-class ThreadLabelRequest(BaseModel):
-    label: str
-
+# ── POST /threads/{thread_id}/label ───────────
 @app.post("/threads/{thread_id}/label")
-async def set_thread_label(thread_id: str, payload: ThreadLabelRequest):
-    await backend.save_thread_label(thread_id, payload.label)
+async def set_thread_label(thread_id: str, payload: ThreadLabelRequest, user_id: str = "default_user"):
+    await backend.save_thread_label(thread_id, payload.label, user_id)
     return {"ok": True}
 
+
+# ── GET /threads/{thread_id}/label ────────────
 @app.get("/threads/{thread_id}/label")
 async def get_thread_label(thread_id: str):
     label = await backend.get_thread_label(thread_id)
     return {"label": label}
 
 
+# ── /chat — pass user_id through ──────────────
 @app.post("/chat")
-async def chat(payload: ChatRequest):
+async def chat(
+    query:      str           = Form(...),
+    thread_id:  str           = Form(...),
+    web_search: bool          = Form(False),
+    user_id:    str           = Form("default_user"),   # ← already exists, no change
+    files: List[UploadFile]   = File(default=[]),
+):
     if backend.chatbot is None:
         raise HTTPException(status_code=503, detail="Agent not ready. Is MCP running?")
 
-    config = {"configurable": {"thread_id": payload.thread_id}}
+    saved_filenames = await file_handling(files)
 
+    user_message = query
+    if saved_filenames:
+        user_message = (
+            f"{query}\n\n"
+            f"[UPLOADED FILES: {', '.join(saved_filenames)}]\n"
+            f"Use these filenames when calling any file-related tools."
+        )
+
+    logger.info("Agent message preview:\n%s", user_message[:400])
+
+    config = {"configurable": {"thread_id": thread_id}}
     try:
         result = await backend.chatbot.ainvoke(
-            {"messages": [{"role": "user", "content": payload.query}]},
+            {"messages": [{"role": "user", "content": user_message}]},
             config,
         )
         await trim_memory(config)
@@ -251,6 +292,17 @@ async def chat(payload: ChatRequest):
         logger.exception("Agent invocation error")
         raise HTTPException(status_code=500, detail=str(e))
 
-    response = _build_response(result, payload.thread_id)
-    logger.info("Response type returned: %s", response.get("response_type"))
+    response = _build_response(result, thread_id)
+    logger.info("web_search=%s  files=%s  response_type=%s  user=%s",
+                web_search, saved_filenames, response.get("response_type"), user_id)
     return response
+
+
+# ── helper — get thread owner ─────────────────
+async def _get_thread_owner(thread_id: str) -> str | None:
+    async with backend.get_db_conn() as conn:
+        async with conn.execute(
+            "SELECT user_id FROM thread_labels WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None

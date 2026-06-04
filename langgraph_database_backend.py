@@ -23,15 +23,25 @@ from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import RemoveMessage
-from prompt import linkedin_prompt   # your existing system-prompt string
+from prompt import main_prompt   # your existing system-prompt string
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── singletons ────────────────────────────────
-chatbot      = None   # create_agent compiled graph
-checkpointer = None   # AsyncSqliteSaver
-_db_conn     = None   # raw aiosqlite connection
+chatbot      = None
+checkpointer = None
+_db_conn     = None        # kept for checkpointer only (AsyncSqliteSaver needs one conn)
+DB_PATH      = "chatbot.db"
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def get_db_conn():
+    """Fresh connection per label operation — safe for concurrent users."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        yield conn
 
 MAX_QUERIES  = 5         # keep last 5 Q-A pairs
 MAX_MESSAGES = MAX_QUERIES * 2   # = 10  (1 human + 1 AI per query)
@@ -109,7 +119,7 @@ async def init_agent() -> None:
     chatbot = create_agent(
         model=_load_llm(),
         tools=tools,
-        system_prompt=linkedin_prompt,  
+        system_prompt=main_prompt,  
         checkpointer=checkpointer,
         name="iprocess_agent",
     )
@@ -140,30 +150,51 @@ async def retrieve_all_threads() -> list[str]:
     return list(threads)[::-1]
 
 
+async def save_thread_label(thread_id: str, label: str, user_id: str = "default_user") -> None:
+    async with get_db_conn() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS thread_labels (
+                thread_id TEXT PRIMARY KEY,
+                label     TEXT NOT NULL,
+                user_id   TEXT NOT NULL DEFAULT 'default_user'
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO thread_labels (thread_id, label, user_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET label = excluded.label, user_id = excluded.user_id
+        """, (thread_id, label, user_id))
+        await conn.commit()
 
-async def save_thread_label(thread_id: str, label: str) -> None:
-    await _db_conn.execute("""
-        CREATE TABLE IF NOT EXISTS thread_labels (
-            thread_id TEXT PRIMARY KEY,
-            label     TEXT NOT NULL
-        )
-    """)
-    await _db_conn.execute("""
-        INSERT INTO thread_labels (thread_id, label)
-        VALUES (?, ?)
-        ON CONFLICT(thread_id) DO UPDATE SET label = excluded.label
-    """, (thread_id, label))
-    await _db_conn.commit()
 
 async def get_thread_label(thread_id: str) -> str:
-    await _db_conn.execute("""
-        CREATE TABLE IF NOT EXISTS thread_labels (
-            thread_id TEXT PRIMARY KEY,
-            label     TEXT NOT NULL
-        )
-    """)
-    async with _db_conn.execute(
-        "SELECT label FROM thread_labels WHERE thread_id = ?", (thread_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else ""
+    async with get_db_conn() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS thread_labels (
+                thread_id TEXT PRIMARY KEY,
+                label     TEXT NOT NULL,
+                user_id   TEXT NOT NULL DEFAULT 'default_user'
+            )
+        """)
+        async with conn.execute(
+            "SELECT label FROM thread_labels WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else ""
+
+
+async def get_user_threads(user_id: str) -> list[str]:
+    async with get_db_conn() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS thread_labels (
+                thread_id TEXT PRIMARY KEY,
+                label     TEXT NOT NULL,
+                user_id   TEXT NOT NULL DEFAULT 'default_user'
+            )
+        """)
+        async with conn.execute(
+            "SELECT thread_id FROM thread_labels WHERE user_id = ? ORDER BY rowid DESC",
+            (user_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
