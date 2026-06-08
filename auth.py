@@ -75,6 +75,11 @@ TWILIO_FROM       = os.getenv("TWILIO_FROM_NUMBER",  "")
 
 DB_PATH           = os.getenv("DB_PATH",           "sags_users.db")
 
+# ── PLAN PRICING (from .env) ──────────────────────────────────────────────────
+PRO_MONTHLY_PRICE   = int(os.getenv("PRO_MONTHLY_PRICE",   "199"))
+PRO_QUARTERLY_PRICE = int(os.getenv("PRO_QUARTERLY_PRICE", "559"))
+PRO_QUARTERLY_SAVE  = int(os.getenv("PRO_QUARTERLY_SAVE",  "38"))
+
 # ── BCRYPT (direct, no passlib) ───────────────────────────────────────────────
 def hash_password(password: str) -> str:
     """Hash password using bcrypt directly — avoids passlib compatibility bug."""
@@ -183,6 +188,15 @@ async def serve_bot():
             return f.read()
     except FileNotFoundError:
         return "<h2>index.html not found in the same directory as auth.py</h2>"
+    
+
+@app.get("/plans", response_class=HTMLResponse)
+async def serve_plans():
+    try:
+        with open("plan_ui.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h2>plan_ui.html not found</h2>"
 
 # ── PYDANTIC MODELS ───────────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
@@ -418,6 +432,14 @@ def user_to_dict(user) -> dict:
     return u
 
 # ── ROUTES ────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/plans-config")
+async def plans_config():
+    return {
+        "pro_monthly_price":   PRO_MONTHLY_PRICE,
+        "pro_quarterly_price": PRO_QUARTERLY_PRICE,
+        "pro_quarterly_save":  PRO_QUARTERLY_SAVE,
+    }
 
 @app.get("/auth/health")
 async def health():

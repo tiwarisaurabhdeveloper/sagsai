@@ -416,6 +416,79 @@ input.err{border-color:var(--red)!important}
   .bot-panel,.bot-panel.open{width:calc(100vw - 20px)}
   .navbar{padding:0 16px}
 }
+
+/* ── Limit Popup ── */
+.limit-popup-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:2000;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}
+.limit-popup-overlay.show{display:flex}
+.limit-popup{background:#fff;border-radius:20px;padding:38px 32px;max-width:380px;width:100%;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.22);animation:lpIn .35s cubic-bezier(.16,1,.3,1) both;position:relative}
+@keyframes lpIn{from{opacity:0;transform:scale(.92) translateY(16px)}to{opacity:1;transform:none}}
+.lp-icon{width:60px;height:60px;border-radius:50%;background:rgba(239,68,68,.09);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px}
+.lp-title{font-family:var(--font-h);font-size:21px;font-weight:800;color:#0f172a;margin-bottom:10px}
+.lp-msg{font-size:14px;color:#64748b;line-height:1.65;margin-bottom:12px}
+.lp-msg strong{color:#0f172a}
+.lp-countdown{display:inline-block;background:rgba(0,0,0,.05);border:1px solid rgba(0,0,0,.10);border-radius:20px;padding:5px 14px;font-size:13px;color:#0f172a;font-weight:600;margin-bottom:24px}
+.lp-actions{display:flex;flex-direction:column;gap:10px}
+.lp-btn{width:100%;padding:13px;border:none;border-radius:12px;font-family:var(--font-h);font-size:15px;font-weight:700;cursor:pointer;transition:all .2s}
+.lp-btn.primary{background:#111;color:#fff}
+.lp-btn.primary:hover{background:#333;transform:translateY(-1px)}
+.lp-btn.ghost{background:#f1f1f1;border:1.5px solid rgba(0,0,0,.10);color:#64748b;font-size:13px}
+.lp-btn.ghost:hover{color:#111}
+
+/* ── Plans Popup (no header) ── */
+.plans-popup-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2100;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}
+.plans-popup-overlay.show{display:flex}
+.plans-popup{background:#fff;border-radius:20px;padding:36px 28px 32px;max-width:640px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.22);animation:lpIn .35s cubic-bezier(.16,1,.3,1) both;position:relative}
+.pp-close{position:absolute;top:14px;right:14px;background:none;border:none;font-size:20px;cursor:pointer;color:#94a3b8;padding:4px 8px;border-radius:8px;transition:color .2s}
+.pp-close:hover{color:#0f172a}
+.pp-hero{text-align:center;margin-bottom:28px}
+.pp-title{font-family:var(--font-h);font-size:24px;font-weight:800;margin-bottom:6px}
+.pp-title em{font-style:normal;background:linear-gradient(135deg,#4f46e5,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.pp-sub{font-size:13.5px;color:#64748b}
+
+/* Toggle */
+.pp-toggle{display:flex;justify-content:center;margin-bottom:24px}
+.pp-toggle-inner{display:flex;background:#f1f5f9;border:1px solid rgba(0,0,0,.08);border-radius:40px;padding:3px;gap:3px}
+.pp-tog{padding:7px 20px;border:none;border-radius:36px;background:none;font-family:var(--font-h);font-size:12.5px;font-weight:600;color:#64748b;cursor:pointer;transition:all .22s}
+.pp-tog.on{background:#fff;color:#4f46e5;box-shadow:0 2px 8px rgba(0,0,0,.10)}
+
+/* Plan cards */
+.pp-plans{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:8px}
+@media(max-width:520px){.pp-plans{grid-template-columns:1fr}}
+.pp-card{border:1.5px solid rgba(0,0,0,.10);border-radius:16px;padding:24px 20px;position:relative;transition:border-color .2s,transform .2s,box-shadow .2s;cursor:default}
+.pp-card:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,.09)}
+.pp-card.popular{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.08)}
+.pp-pop-badge{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#4f46e5,#0ea5e9);color:#fff;font-family:var(--font-h);font-size:10px;font-weight:700;padding:3px 12px;border-radius:20px;white-space:nowrap;letter-spacing:.05em}
+.pp-card-icon{font-size:22px;margin-bottom:10px}
+.pp-card-name{font-family:var(--font-h);font-size:16px;font-weight:800;margin-bottom:4px}
+.pp-card-desc{font-size:12px;color:#64748b;margin-bottom:14px;line-height:1.5}
+.pp-price{display:flex;align-items:baseline;gap:2px;margin-bottom:4px}
+.pp-currency{font-family:var(--font-h);font-size:14px;font-weight:700;color:#64748b}
+.pp-amount{font-family:var(--font-h);font-size:32px;font-weight:800;letter-spacing:-1px;line-height:1}
+.pp-amount.grad{background:linear-gradient(135deg,#4f46e5,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.pp-per{font-size:12px;color:#94a3b8;margin-left:2px}
+.pp-billing{font-size:11px;color:#94a3b8;margin-bottom:4px}
+.pp-save{display:inline-block;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.22);color:#059669;font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;margin-bottom:14px}
+.pp-feats{list-style:none;margin-bottom:18px}
+.pp-feats li{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;color:#374151;padding:5px 0;border-bottom:1px solid rgba(0,0,0,.05)}
+.pp-feats li:last-child{border:none}
+.pp-check{color:#10b981;font-size:11px;margin-top:2px;flex-shrink:0}
+.pp-x{color:#cbd5e1;font-size:11px;margin-top:2px;flex-shrink:0}
+.pp-feat-muted{color:#94a3b8}
+
+/* Usage meter on free card */
+.pp-meter{margin-bottom:14px}
+.pp-meter-hd{display:flex;justify-content:space-between;font-size:11px;color:#64748b;margin-bottom:5px}
+.pp-meter-track{height:5px;background:#e5e7eb;border-radius:4px;overflow:hidden}
+.pp-meter-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#10b981,#0ea5e9);transition:width .4s}
+.pp-meter-renew{font-size:11px;color:#94a3b8;margin-top:4px}
+
+/* CTA buttons */
+.pp-cta{width:100%;padding:11px;border:none;border-radius:10px;font-family:var(--font-h);font-size:13.5px;font-weight:700;cursor:pointer;transition:all .2s}
+.pp-cta.primary{background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;box-shadow:0 3px 12px rgba(79,70,229,.22)}
+.pp-cta.primary:hover{box-shadow:0 6px 20px rgba(79,70,229,.36);transform:translateY(-1px)}
+.pp-cta.secondary{background:#f8f9fb;border:1.5px solid rgba(0,0,0,.10);color:#374151}
+.pp-cta.secondary:hover{border-color:#4f46e5;color:#4f46e5}
+
 </style>
 </head>
 <body>
@@ -731,6 +804,86 @@ input.err{border-color:var(--red)!important}
   </div>
 
 </div><!-- /page-home -->
+
+<!-- Limit Popup -->
+<div class="limit-popup-overlay" id="limit-popup-overlay">
+  <div class="limit-popup">
+    <div class="lp-icon">🚫</div>
+    <div class="lp-title">Daily limit reached</div>
+    <div class="lp-msg">You've used all <strong id="lp-limit">5</strong> free messages today.<br>Upgrade to Pro for unlimited access, or wait for reset at <strong>1:00 AM</strong>.</div>
+    <div class="lp-countdown" id="lp-countdown">Resets in …</div>
+    <div class="lp-actions">
+      <button class="lp-btn primary" onclick="openPlansPopup()">⚡ Upgrade to Pro →</button>
+      <button class="lp-btn ghost" onclick="closeLimitPopup()">I'll wait — resets at 1:00 AM</button>
+    </div>
+  </div>
+</div>
+
+<!-- Plans Popup -->
+<div class="plans-popup-overlay" id="plans-popup-overlay">
+  <div class="plans-popup">
+    <button class="pp-close" onclick="closePlansPopup()">✕</button>
+    <div class="pp-hero">
+      <div class="pp-title">Choose your <em>plan</em></div>
+      <div class="pp-sub">Simple pricing · No hidden fees</div>
+    </div>
+
+    <div class="pp-toggle">
+      <div class="pp-toggle-inner">
+        <button class="pp-tog on" id="pp-tog-m" onclick="setPPToggle('monthly')">Monthly</button>
+        <button class="pp-tog" id="pp-tog-q" onclick="setPPToggle('quarterly')">3 Months <span style="font-size:10px;background:rgba(16,185,129,.12);color:#059669;border-radius:10px;padding:1px 6px;margin-left:3px">Save 7%</span></button>
+      </div>
+    </div>
+
+    <div class="pp-plans">
+      <!-- Free card -->
+      <div class="pp-card">
+        <div class="pp-card-icon">🆓</div>
+        <div class="pp-card-name">Free</div>
+        <div class="pp-card-desc">Try SAGS AI with daily messages at no cost.</div>
+        <div class="pp-price"><span class="pp-amount">₹0</span></div>
+        <div class="pp-billing">Always free · No card needed</div>
+        <div class="pp-meter" style="margin-top:10px">
+          <div class="pp-meter-hd">
+            <span>Messages used today</span>
+            <span id="pp-meter-val">— / —</span>
+          </div>
+          <div class="pp-meter-track"><div class="pp-meter-fill" id="pp-meter-fill" style="width:0%"></div></div>
+          <div class="pp-meter-renew" id="pp-meter-renew">Resets at 1:00 AM</div>
+        </div>
+        <ul class="pp-feats">
+          <li><span class="pp-check">✓</span><span><span id="pp-free-limit">5</span> messages / day<br><small style="color:#94a3b8">Resets at 1:00 AM</small></span></li>
+          <li><span class="pp-check">✓</span>Job search &amp; resume tools</li>
+          <li><span class="pp-x">✕</span><span class="pp-feat-muted">Unlimited messages</span></li>
+          <li><span class="pp-x">✕</span><span class="pp-feat-muted">Priority speed</span></li>
+        </ul>
+        <button class="pp-cta secondary" onclick="chooseFree()">Continue with Free</button>
+      </div>
+
+      <!-- Pro card -->
+      <div class="pp-card popular">
+        <div class="pp-pop-badge">Most Popular</div>
+        <div class="pp-card-icon">⚡</div>
+        <div class="pp-card-name">Pro</div>
+        <div class="pp-card-desc">Unlimited AI for serious job seekers.</div>
+        <div class="pp-price">
+          <span class="pp-currency">₹</span>
+          <span class="pp-amount grad" id="pp-pro-amount">199</span>
+          <span class="pp-per" id="pp-pro-per">/ month</span>
+        </div>
+        <div class="pp-billing" id="pp-pro-billing">Billed monthly · Cancel anytime</div>
+        <div class="pp-save" id="pp-pro-save" style="display:none">Save ₹38 vs monthly</div>
+        <ul class="pp-feats" style="margin-top:10px">
+          <li><span class="pp-check">✓</span>Unlimited messages</li>
+          <li><span class="pp-check">✓</span>Everything in Free</li>
+          <li><span class="pp-check">✓</span>Priority response speed</li>
+          <li><span class="pp-check">✓</span>Advanced resume insights</li>
+        </ul>
+        <button class="pp-cta primary" onclick="choosePro()">Upgrade to Pro →</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════ SCRIPTS ══════════════ -->
 <script>
@@ -1207,6 +1360,109 @@ function toggleFS() {
     if (fsb) fsb.innerHTML = '⛶';
   }
 }
+
+/* ── Quota / Plan popups ── */
+var _lpTimer = null;
+var _ppBilling = 'monthly';
+
+// Listen for messages from the bot iframe
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'QUOTA_EXCEEDED') {
+    closeBot();                          // close the bot toggle
+    openLimitPopup(e.data.limit || 5);
+  }
+  if (e.data && e.data.type === 'SHOW_PLANS') {
+    closeLimitPopup();
+    openPlansPopup();
+  }
+});
+
+function openLimitPopup(limit) {
+  document.getElementById('lp-limit').textContent = limit || 5;
+  document.getElementById('limit-popup-overlay').classList.add('show');
+  startLPCountdown();
+}
+function closeLimitPopup() {
+  document.getElementById('limit-popup-overlay').classList.remove('show');
+  if (_lpTimer) { clearInterval(_lpTimer); _lpTimer = null; }
+}
+function startLPCountdown() {
+  if (_lpTimer) clearInterval(_lpTimer);
+  function tick() {
+    var now = new Date(), target = new Date();
+    target.setHours(1,0,0,0);
+    if (now.getHours() >= 1) target.setDate(target.getDate()+1);
+    var s = Math.floor((target-now)/1000);
+    var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    document.getElementById('lp-countdown').textContent =
+      'Resets in ' + (h>0?h+'h ':'') + (m>0||h>0?m+'m ':'')+sec+'s';
+  }
+  tick(); _lpTimer = setInterval(tick, 1000);
+}
+
+function openPlansPopup() {
+  fetch('/auth/plans-config')
+    .then(function(r){ return r.json(); })
+    .then(function(cfg){
+      window._PRICES = {
+        monthly:   cfg.pro_monthly_price,
+        quarterly: cfg.pro_quarterly_price,
+        save:      cfg.pro_quarterly_save
+      };
+      setPPToggle(_ppBilling);
+    })
+    .catch(function(){});
+  document.getElementById('plans-popup-overlay').classList.add('show');
+}
+function closePlansPopup() {
+  document.getElementById('plans-popup-overlay').classList.remove('show');
+}
+
+function setPPToggle(mode) {
+  _ppBilling = mode;
+  var P = window._PRICES || { monthly: 199, quarterly: 559, save: 38 };
+  document.getElementById('pp-tog-m').classList.toggle('on', mode==='monthly');
+  document.getElementById('pp-tog-q').classList.toggle('on', mode==='quarterly');
+  if (mode === 'monthly') {
+    document.getElementById('pp-pro-amount').textContent = P.monthly;
+    document.getElementById('pp-pro-per').textContent = '/ month';
+    document.getElementById('pp-pro-billing').textContent = 'Billed monthly · Cancel anytime';
+    document.getElementById('pp-pro-save').style.display = 'none';
+  } else {
+    document.getElementById('pp-pro-amount').textContent = P.quarterly;
+    document.getElementById('pp-pro-per').textContent = '/ 3 months';
+    document.getElementById('pp-pro-billing').textContent = 'Single payment of ₹' + P.quarterly;
+    document.getElementById('pp-pro-save').style.display = 'inline-block';
+    document.getElementById('pp-pro-save').textContent = 'Save ₹' + P.save + ' vs monthly';
+  }
+}
+
+function chooseFree() {
+  closePlansPopup();
+  closeLimitPopup();
+  // tell iframe user chose free so it rechecks quota
+  var iframe = document.getElementById('bot-iframe');
+  if (iframe && iframe.contentWindow) {
+    iframe.contentWindow.postMessage({ type: 'FREE_CHOSEN' }, '*');
+  }
+  setTimeout(function(){ openBot(); }, 200);
+}
+
+function choosePro() {
+  var P = window._PRICES || { monthly: 199, quarterly: 559 };
+  alert('Pro payments coming soon!\n\n₹' +
+    (_ppBilling === 'monthly' ? P.monthly + ' / month' : P.quarterly + ' / 3 months') +
+    '\n\nFor now, your free messages reset at 1:00 AM daily.');
+}
+
+// Close overlays on backdrop click
+document.getElementById('limit-popup-overlay').addEventListener('click', function(e){
+  if (e.target===this) closeLimitPopup();
+});
+document.getElementById('plans-popup-overlay').addEventListener('click', function(e){
+  if (e.target===this) closePlansPopup();
+});
+
 </script>
 </body>
 </html>
