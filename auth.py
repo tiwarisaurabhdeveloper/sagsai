@@ -625,27 +625,53 @@ async def verify_otp_route(req: VerifyOtpRequest):
 
 @app.post("/auth/forgot-password")
 async def forgot_password(req: SendOtpRequest):
+    # Normalize target — strip spaces
+    target = req.target.strip()
+
+    if not target:
+        raise HTTPException(400, "Please enter your email or phone number")
+
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute(
-            "SELECT id FROM users WHERE email=? OR phone=?", (req.target, req.target)
+            "SELECT id FROM users WHERE email=? OR phone=?",
+            (target, target)
         ) as cur:
-            if not await cur.fetchone():
-                raise HTTPException(404, "No account found with this email or phone")
+            user = await cur.fetchone()
+
+    if not user:
+        raise HTTPException(
+            404,
+            "No account found with this email or phone. "
+            "Please create an account first."
+        )
 
     otp = generate_otp()
-    await store_otp(req.target, otp, "forgot_password")
-    if "@" in req.target:
-        await send_otp_email(req.target, otp, "forgot_password")
+    await store_otp(target, otp, "forgot_password")
+    if "@" in target:
+        await send_otp_email(target, otp, "forgot_password")
     else:
-        await send_otp_sms(req.target, otp)
+        await send_otp_sms(target, otp)
     return {"message": "Password reset OTP sent"}
 
 
 @app.post("/auth/reset-password")
 async def reset_password(req: ResetPasswordRequest):
-    if not await validate_otp(req.target, req.otp_code, "forgot_password"):
-        raise HTTPException(400, "Invalid or expired OTP")
+    # OTP was already verified on the verify-otp step.
+    # We just need a valid reset_token to confirm the session.
+    # Check if a verified (used=1) OTP exists for this target recently.
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("""
+            SELECT id FROM otps
+            WHERE target=? AND otp_code=? AND purpose='forgot_password'
+              AND used=1
+              AND created_at > datetime('now', '-15 minutes')
+            ORDER BY created_at DESC LIMIT 1
+        """, (req.target, req.otp_code)) as cur:
+            row = await cur.fetchone()
+    if not row:
+        raise HTTPException(400, "Reset session expired. Please request a new OTP.")
 
     pw_hash = hash_password(req.new_password)
     async with aiosqlite.connect(DB_PATH) as conn:

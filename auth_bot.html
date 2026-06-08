@@ -743,6 +743,7 @@ var GCID  = '';                       // Set your Google Client ID here to enabl
 var user        = null;
 var token       = null;
 var pendingAuth = null;   // ← add this
+var pendingToken = null;   // ← ADD THIS LINE
 var otpCtx     = { target:'', purpose:'', back:'page-login' };
 var resetCtx   = { target:'', otp_code:'' };
 var botOpen    = false;
@@ -767,7 +768,6 @@ function showPage(id) {
     catch(e){}
   }
   showPage('page-login');
-  buildOTPBoxes();
   if (GCID) loadGoogleScript();
 })();
 
@@ -1020,12 +1020,17 @@ function clearOTP() {
 
 function goToOtp(target, purpose, back, subtitle) {
   otpCtx = { target:target, purpose:purpose, back:back };
-  $('otp-to').textContent    = target;
-  $('otp-sub').textContent   = subtitle || 'Enter the 6-digit code we sent';
+  $('otp-to').textContent  = target;
+  $('otp-sub').textContent = subtitle || 'Enter the 6-digit code we sent';
   hideAlert('otp-alert');
-  clearOTP();
+  buildOTPBoxes();   // ← rebuild fresh every time OTP page opens
   showPage('page-otp');
   startResendTimer(30);
+  // Focus first box after page is visible
+  setTimeout(function(){
+    var first = document.querySelector('.otp-inp');
+    if (first) first.focus();
+  }, 100);
 }
 
 function goBackOtp() { showPage(otpCtx.back); }
@@ -1048,19 +1053,19 @@ function doVerifyOtp() {
 .then(function(d){
   setLoading('btn-otp', false, 'Verify Code →');
   if (otpCtx.purpose === 'forgot_password') {
-    resetCtx = { target:otpCtx.target, otp_code:code };
+    // Store for reset-password step
+    resetCtx = { target: otpCtx.target, otp_code: code };
     showPage('page-reset');
-  } else {
-    // d now contains access_token + user directly from verify endpoint
-    if (d.access_token) {
-      onAuth(d);          // ← use the token returned by verify-otp
-    } else if (pendingAuth) {
-      onAuth(pendingAuth);
-      pendingAuth = null;
-    } else {
-      showPage('page-home');
-    }
+  } else if (d.access_token) {
+    // Registration verified — login immediately
+    onAuth(d);
     pendingToken = null;
+  } else if (pendingAuth) {
+    onAuth(pendingAuth);
+    pendingAuth  = null;
+    pendingToken = null;
+  } else {
+    showPage('page-home');
   }
 })
     .catch(function(e){
@@ -1090,10 +1095,16 @@ function startResendTimer(secs) {
 /* ─── FORGOT PASSWORD ────────────────────────────────── */
 function doForgot() {
   var tgt = $('fp-tgt').value.trim();
-  showErr('e-fpt', !tgt); if (!tgt) return;
+
+  // Basic validation before hitting server
+  showErr('e-fpt', !tgt); 
+  if (!tgt) return;
+
+  // Extra: tell user clearly what we're checking
   hideAlert('fp-alert');
   setLoading('btn-fp', true);
-  api('/auth/forgot-password','POST',{ target:tgt, purpose:'forgot_password' })
+
+  api('/auth/forgot-password', 'POST', { target: tgt, purpose: 'forgot_password' })
     .then(function(){
       setLoading('btn-fp', false, 'Send Reset Code →');
       goToOtp(tgt, 'forgot_password', 'page-forgot',
@@ -1101,7 +1112,8 @@ function doForgot() {
     })
     .catch(function(e){
       setLoading('btn-fp', false, 'Send Reset Code →');
-      showAlert('fp-alert','fp-alert-msg', e.message);
+      // Show the exact error from backend clearly
+      showAlert('fp-alert', 'fp-alert-msg', e.message);
     });
 }
 
@@ -1117,16 +1129,27 @@ function doResetPw() {
   if (!ok) return;
   hideAlert('rp-alert');
   setLoading('btn-rp', true);
+
   api('/auth/reset-password','POST',{
-    target:      resetCtx.target,
-    otp_code:    resetCtx.otp_code,
+    target:       resetCtx.target,
+    otp_code:     resetCtx.otp_code,
     new_password: pw
   })
-    .then(function(){ showPage('page-reset-ok'); })
-    .catch(function(e){
-      setLoading('btn-rp', false, 'Set New Password →');
-      showAlert('rp-alert','rp-alert-msg', e.message);
+  .then(function(){
+    // Auto-login with new password immediately
+    return api('/auth/login','POST',{
+      identifier: resetCtx.target,
+      password:   pw
     });
+  })
+  .then(function(d){
+    // Password changed + logged in — go straight to home
+    onAuth(d);
+  })
+  .catch(function(e){
+    setLoading('btn-rp', false, 'Set New Password →');
+    showAlert('rp-alert','rp-alert-msg', e.message);
+  });
 }
 
 /* ─── LOGOUT ─────────────────────────────────────────── */
@@ -1139,6 +1162,11 @@ function doLogout() {
   if (panel){ panel.classList.remove('open','fullscreen'); }
   if (btn)  { btn.classList.remove('open'); }
   if (ico)  { ico.innerHTML = '💬'; }
+  // ── ADD THESE 3 LINES ──
+  var lb = $('btn-login');
+  if (lb){ lb.disabled = false; lb.innerHTML = 'Sign In →'; }
+  hideAlert('login-alert');
+  // ───────────────────────
   showPage('page-login');
 }
 
